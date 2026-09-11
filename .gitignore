@@ -11,3 +11,4 @@ AGENT.md
 scripts/__pycache__/
 __pycache__/
 .git/
+dist/
