@@ -245,6 +245,18 @@ cookies 具有账号会话权限，不能提交到技能仓库、复制到其他
 
 ## 更新日志
 
+### v0.5.1（组件安装链路修复 + 提取质量优化）
+- 修复 ffmpeg 缺失时确认安装报"未知组件类型"的死代码缺陷，自动安装链路恢复可用；
+- 修复 Windows + NVIDIA 安装 whisper-cli 时 `WHISPERCPP_CUBLAS_ASSETS` 未定义崩溃，恢复 N 卡 cublas GPU 版自动安装（11.8.0 / 12.4.0 双版本按序尝试）；移除官方已不存在的 `whisper-bin-arm64.zip` 资产（Windows ARM64 走源码构建兜底）；
+- 修复 macOS ffmpeg 下载包名丢失 `.zip` 后缀导致解包必败的问题；
+- 修复 EPUB 依赖检测永远误报缺失（import 名误用组名 `epub`，应为 `ebooklib`）；
+- `SMART_SUMMARIZE_PROXY` 现已真正生效（此前仅读取不使用，B站请求会忽略该配置）；
+- 网页提取标题改用前缀剥离（原 `lstrip` 会啃坏以 T/i/t/l/e 等字母开头的标题），并清理 Jina 输出的 `URL Source:` / `Markdown Content:` 元信息行；
+- slice protocol 扩展覆盖：YouTube/B站的超长字幕（`transcript` 键）同样走分片落盘，不再直灌 stdout；
+- YouTube 字幕语言回退：首选 zh/en 无字幕时自动全量拉取并优选 zh/en，日/韩等其它语言视频可正常提取；
+- yt-dlp / pandoc / ffmpeg 子进程显式 UTF-8 解码，修复 Windows 中文 locale 下标题与 .doc 正文乱码；
+- 其它：异常路径临时目录清理、cookieHint 误报收窄（移除过宽的 "age" 子串）、`--output srt` 帮助文案修正、组件安装后仍缺失时返回结构化错误。
+
 ### v0.5.0（Excel/PowerPoint 支持 + 大文档分片协议）
 - 新增 Excel (.xlsx/.xlsm) 与 PowerPoint (.pptx) 提取（运行时按需确认安装 openpyxl/python-pptx）；
 - 大文档处理协议：>256K 字符自动分片落盘（段落边界 + 300 字符重叠窗口 + 每片校验和），stdout 只输出清单；`--slice N` 可直接取单片；

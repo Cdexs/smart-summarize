@@ -8,6 +8,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v3.3: 音频转录只走 whisper.cpp，移除 faster-whisper 回退
 - v3.4: 按操作系统寻找 whisper-cli，临时目录和 ffmpeg 查找跨平台化；cookies 改为显式环境变量
 - v3.5: 运行时检测缺失组件（ffmpeg/whisper-cli/ggml 模型），提示大小并经用户确认后下载安装，随后继续原任务
+- v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -179,6 +180,7 @@ def _find_ytdlp():
 
 def extract_youtube(video_id):
     result = {"platform": "youtube", "video_id": video_id, "title": "", "author": "", "transcript": "", "success": False}
+    tmpdir = None
     try:
         tmpdir = make_tmpdir(f"ss_yt_{video_id}_")
         cookies_args = _yt_cookies_args()
@@ -189,7 +191,7 @@ def extract_youtube(video_id):
 
         info_cmd = [ytdlp, '--js-runtimes', 'node', '--dump-json', '--skip-download',
                     f'https://youtube.com/watch?v={video_id}'] + cookies_args
-        r = subprocess.run(info_cmd, capture_output=True, text=True, timeout=120)
+        r = subprocess.run(info_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         if r.returncode == 0 and r.stdout:
             try:
                 info = json.loads(r.stdout.strip().split('\n')[0])
@@ -198,23 +200,41 @@ def extract_youtube(video_id):
             except Exception:
                 pass
 
-        sub_cmd = [ytdlp, '--js-runtimes', 'node',
+        def _pick_subtitle_file():
+            files = [f for f in tmpdir.glob(f"{video_id}.*") if f.suffix in ('.srt', '.vtt')]
+            if not files:
+                return None
+            # 多语言回退时优先取 zh/en 字幕
+            files.sort(key=lambda f: (
+                0 if f.stem[len(video_id):].lstrip('.').lower().startswith(('zh', 'en')) else 1,
+                f.name))
+            return files[0]
+
+        def _try_fetch(langs):
+            cmd = [ytdlp, '--js-runtimes', 'node',
                    '--write-sub', '--write-auto-sub',
-                   '--sub-lang', 'zh-CN,zh-TW,zh-Hans,zh-Hant,en',
+                   '--sub-langs', langs,
                    '--skip-download', '--output', f'{tmpdir}/%(id)s',
                    f'https://youtube.com/watch?v={video_id}'] + cookies_args
-        sub_r = subprocess.run(sub_cmd, capture_output=True, text=True, timeout=180)
+            return subprocess.run(cmd, capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=180)
 
-        for f in sorted(tmpdir.glob(f"{video_id}.*")):
-            if f.suffix in ('.srt', '.vtt'):
-                result["transcript"] = clean_subtitle(f.read_text(encoding='utf-8', errors='ignore'))
-                result["success"] = True
-                break
+        sub_r = _try_fetch('zh-CN,zh-TW,zh-Hans,zh-Hant,en')
+        sub_file = _pick_subtitle_file()
+        if sub_file is None:
+            # 首选语言无字幕时回退全量拉取：日/韩等其它语言视频也能提取
+            sub_r = _try_fetch('all')
+            sub_file = _pick_subtitle_file()
+
+        if sub_file is not None:
+            result["transcript"] = clean_subtitle(sub_file.read_text(encoding='utf-8', errors='ignore'))
+            result["success"] = True
 
         if not result["success"]:
             err_text = ((sub_r.stderr or '') + (sub_r.stdout or ''))[:4000]
-            auth_signs = ("Sign in", "sign in", "not a bot", "age", "members-only",
-                          "Private video", "login", "cookies")
+            # 注意别用过宽的子串（如裸 "age" 会命中 "message"）造成误报
+            auth_signs = ("sign in", "not a bot", "age-restricted", "confirm your age",
+                          "members-only", "private video", "login", "cookies")
             if any(s.lower() in err_text.lower() for s in auth_signs):
                 cookies_path = _youtube_cookies_path()
                 result["cookieHint"] = (
@@ -224,9 +244,11 @@ def extract_youtube(video_id):
                 )
                 print(f"  ⚠️ {result['cookieHint']}", file=sys.stderr)
 
-        shutil.rmtree(tmpdir, ignore_errors=True)
     except Exception as e:
         result["error"] = str(e)
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
     return result
 
 
@@ -247,8 +269,9 @@ def extract_bilibili(bvid):
             print("  🍪 已携带 B站登录态（支持 AI 字幕等登录墙内容）", file=sys.stderr)
         # B站是国内站：Windows 系统代理（注册表）常会把国内站转发失败（SSL EOF），
         # 默认绕过系统代理直连；用户显式设置 SMART_SUMMARIZE_PROXY 时尊重该代理。
-        if os.environ.get("SMART_SUMMARIZE_PROXY"):
-            proxies = None  # 交给 requests/环境变量处理
+        user_proxy = os.environ.get("SMART_SUMMARIZE_PROXY")
+        if user_proxy:
+            proxies = {"http": user_proxy, "https": user_proxy}
         elif os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy"):
             proxies = None  # 用户显式设置了终端代理，尊重之
         else:
@@ -291,8 +314,12 @@ def extract_web(url):
             text = r.text
             lines = text.split('\n')
             if lines:
-                result["title"] = lines[0].lstrip('Title: ').strip()
-                result["content"] = '\n'.join(lines[1:]).strip()
+                # 去前缀而非按字符集剥离（lstrip 会把以 T/i/t/l/e/:/空格 开头的标题啃坏）
+                title = lines[0].removeprefix("Title:").strip()
+                result["title"] = title
+                body = [l for l in lines[1:]
+                        if not re.match(r'^(URL Source|Markdown Content):', l)]
+                result["content"] = '\n'.join(body).strip()
                 result["success"] = True
     except Exception as e:
         result["error"] = str(e)
@@ -359,7 +386,8 @@ def extract_word_text(file_path):
             print(f"  ⚠️ Word 提取错误: {e}")
     elif ext == '.doc':
         try:
-            result = subprocess.run(['pandoc', file_path, '-t', 'plain'], capture_output=True, text=True, timeout=60)
+            result = subprocess.run(['pandoc', file_path, '-t', 'plain'], capture_output=True,
+                                    text=True, encoding="utf-8", errors="replace", timeout=60)
             if result.returncode == 0:
                 return result.stdout
         except Exception:
@@ -532,14 +560,13 @@ def make_chunks(text, chunk_chars=CHUNK_CHARS, overlap=CHUNK_OVERLAP_CHARS):
                 cur = [tail] if tail else []
                 cur_len = len(tail)
             cur.append(piece)
-            cur_len += len(piece) + 1
+            cur_len += add
     if cur:
         chunks.append("\n\n".join(cur))
     return chunks
 
 def write_slices(title, source_path, content, args_slice=None):
     """大文档分片落盘；args_slice 非 None 时只返回该片内容。"""
-    import io as _io
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:8]
     chunk_dir = TEMP_BASE_DIR / ("ss_slice_" + content_hash[:8])
     chunks = make_chunks(content)
@@ -558,8 +585,8 @@ def write_slices(title, source_path, content, args_slice=None):
             "total_chunks": len(chunks), "chunk_dir": str(chunk_dir),
             "content_hash": "sha256:" + content_hash, "chunks": chunk_entries,
         }
-        _io.open(chunk_dir / "manifest.json", "w", encoding="utf-8").write(
-            json.dumps(manifest, ensure_ascii=False, indent=2))
+        with open(chunk_dir / "manifest.json", "w", encoding="utf-8") as mf:
+            mf.write(json.dumps(manifest, ensure_ascii=False, indent=2))
     except Exception as e:
         return {"platform": "slices", "title": title, "success": False,
                 "error": "分片写入失败: " + str(e)}
@@ -604,6 +631,7 @@ PIP_LIB_GROUPS = {
     },
     "epub": {
         "packages": ["ebooklib"],
+        "import": "ebooklib",
         "purpose": "EPUB 电子书文本提取",
     },
     "yt-dlp": {
@@ -715,7 +743,12 @@ def install_ffmpeg():
     import zipfile
     import tarfile
     with tempfile.TemporaryDirectory(prefix="ss_ffmpeg_dl_") as td:
-        archive = _http_download(url, Path(td) / url.split("/")[-1].split("?")[0], "ffmpeg")
+        # 按 URL 推导包名；evermeet.cx 的 getrelease/zip 末段无后缀，须补 .zip
+        # 否则后缀判定会把它当 tar 解包（macOS 必败）
+        archive_name = url.rsplit("/", 1)[-1].split("?")[0]
+        if not archive_name.endswith((".zip", ".tar.xz", ".tar.gz", ".tgz")):
+            archive_name += ".zip" if "zip" in url.lower() else ".tar.xz"
+        archive = _http_download(url, Path(td) / archive_name, "ffmpeg")
         if archive.suffix == ".zip":
             with zipfile.ZipFile(archive) as zf:
                 zf.extractall(td)
@@ -736,10 +769,16 @@ def install_ffmpeg():
 
 WHISPERCPP_PREBUILT_ASSETS = {
     ("nt", "AMD64"): "whisper-bin-x64.zip",
-    ("nt", "ARM64"): "whisper-bin-arm64.zip",
 }
 # NVIDIA 官方 cublas 预编译版（自带 CUDA 运行库，无需安装 CUDA Toolkit）；
-# 11.8.0 兼容老驱动（270MB），12.4.0 覆盖新卡（671MB），按优先级尝试
+# 11.8.0 兼容老驱动（约 270MB），12.4.0 覆盖新卡（约 671MB），按优先级尝试。
+# 官方无 Windows ARM64 预编译资产，该平台走源码构建兜底。
+WHISPERCPP_CUBLAS_ASSETS = [
+    "whisper-cublas-11.8.0-bin-x64.zip",
+    "whisper-cublas-12.4.0-bin-x64.zip",
+]
+
+
 def _detect_gpu():
     """检测本机 GPU 厂商，返回 (vendor, device_desc, gpu_hint)。"""
     if sys.platform == "darwin":
@@ -987,6 +1026,7 @@ def _install_dep(kind):
             tail = ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
             raise RuntimeError(f"pip 安装失败: {tail}；可手动执行以下命令 {manual}")
         return f"{Path(sys.executable)} -m pip（{' '.join(spec['packages'])}）"
+    if kind == "ffmpeg":
         return install_ffmpeg()
     if kind == "whisper-cli":
         return install_whispercli()
@@ -1163,7 +1203,7 @@ def extract_video_text(file_path):
         try:
             output_file = tmpdir / 'subtitle.srt'
             cmd = [ffmpeg, '-i', file_path, '-map', '0:s:0', str(output_file), '-y']
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             if result.returncode == 0 and output_file.exists():
                 content = output_file.read_text(encoding='utf-8', errors='ignore')
                 text = re.sub(r'\d+\n\d{2}:\d{2}:\d{2}.*?\n\n', '', content, flags=re.DOTALL)
@@ -1175,7 +1215,7 @@ def extract_video_text(file_path):
         # 提取音频并转录
         audio_file = tmpdir / 'audio.wav'
         cmd = [ffmpeg, '-i', file_path, '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1', str(audio_file), '-y']
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         if result.returncode == 0 and audio_file.exists():
             return extract_audio_text(str(audio_file))
     except MissingDependencyError:
@@ -1312,13 +1352,19 @@ def _handle_missing_deps(args, err):
                 "error": "部分组件安装失败（见 stderr）。可手动安装后重试。",
                 "missing": items}
     print("  ↻ 组件就绪，继续执行原任务...", file=sys.stderr)
-    return _run_extraction(args)
+    try:
+        return _run_extraction(args)
+    except MissingDependencyError as e:
+        # 安装声称成功但检测仍不过（如 PATH 未刷新），给出结构化错误而非裸 traceback
+        return {"success": False,
+                "error": "组件安装后仍检测缺失，请检查安装或手动配置环境变量后重试",
+                "missing": [_dep_detail(k) for k in e.kinds]}
 
 def main():
     parser = argparse.ArgumentParser(description='智能内容提取工具')
     parser.add_argument('--url', help='要提取的 URL')
     parser.add_argument('--file', help='要提取的本地文件')
-    parser.add_argument('--output', choices=['json', 'text', 'srt'], default='json', help='输出格式 (srt 仅支持音频/视频转字幕)')
+    parser.add_argument('--output', choices=['json', 'text', 'srt'], default='json', help='输出格式 (srt 仅支持音频转录)')
     parser.add_argument('--model', default='large-v3-turbo', help='Whisper 模型名称 (默认: large-v3-turbo; 可选 large-v3-turbo-q5_0 快速档)')
     parser.add_argument('--no-gpu', action='store_true', help='强制 CPU 转录（禁用 GPU 后端）')
     parser.add_argument('--slice', type=int, metavar='N',
@@ -1343,11 +1389,16 @@ def main():
     except MissingDependencyError as e:
         result = _handle_missing_deps(args, e)
 
-    if args.output == 'json' and result.get("success") and isinstance(result.get("content"), str)             and len(result["content"]) > SLICE_THRESHOLD_CHARS:
-        # slice protocol：超过阈值的内容分片落盘，stdout 只输出清单——
-        # agent 按清单逐片读取（塞爆上下文的物理上限被提取器锁死）
-        title = result.get("title") or result.get("filename") or str(args.file)
-        result = write_slices(title, args.file, result["content"],
+    # slice protocol：超过阈值的内容分片落盘，stdout 只输出清单——
+    # agent 按清单逐片读取（塞爆上下文的物理上限被提取器锁死）。
+    # 本地文档/转录在 content 键，YouTube/B站字幕在 transcript 键，都要覆盖。
+    full = result.get("content")
+    if not isinstance(full, str):
+        full = result.get("transcript") if isinstance(result.get("transcript"), str) else None
+    if args.output == 'json' and result.get("success") and full is not None \
+            and len(full) > SLICE_THRESHOLD_CHARS:
+        title = result.get("title") or result.get("filename") or str(args.url or args.file)
+        result = write_slices(title, args.file or args.url, full,
                               args_slice=args.slice)
     if args.output == 'json':
         print(json.dumps(result, ensure_ascii=False, indent=2))
