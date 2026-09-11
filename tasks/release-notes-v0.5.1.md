@@ -24,10 +24,4 @@
 - 组件安装后仍缺失时返回结构化 JSON 错误而非裸 traceback。
 - `--output srt` 帮助文案与实际行为对齐（仅音频转录支持）。
 
-## ✅ 验证
-
-- 24 项单元断言覆盖全部修复点全部通过（Python 3.14）。
-- CLI 端到端冒烟：小文件直出、425K 字符大文件分片清单（manifest <2KB）、`--slice N` 取片、`--output text`、模拟 300K YouTube 字幕走分片。
-- npm 包产物在干净环境安装并冒烟通过。
-
 **Full Changelog**: https://github.com/Cdexs/smart-summarize/compare/v0.5.0...v0.5.1
