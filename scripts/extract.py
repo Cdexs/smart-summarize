@@ -9,6 +9,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v3.4: 按操作系统寻找 whisper-cli，临时目录和 ffmpeg 查找跨平台化；cookies 改为显式环境变量
 - v3.5: 运行时检测缺失组件（ffmpeg/whisper-cli/ggml 模型），提示大小并经用户确认后下载安装，随后继续原任务
 - v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
+- v0.5.2: 默认临时目录改为技能目录下 temp/（SMART_SUMMARIZE_TMPDIR 优先级不变；技能目录不可写时回退系统 temp）
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -36,13 +37,21 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 if sys.stderr and hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# 临时工作目录根：显式配置优先；Windows 保留本机约定，Unix/WSL 使用系统临时目录。
+# 临时工作目录根：显式配置（SMART_SUMMARIZE_TMPDIR）优先；默认收敛到技能目录下的
+# temp/（与 SKILL.md、scripts/ 同级，随技能自管，不散落系统临时目录）；
+# 技能目录只读不可写时（如部分受限安装环境）退回系统临时目录。
 # 临时目录只保存本次运行的中间文件，不把用户机器路径写死到技能说明中。
 def _default_temp_base_dir():
     configured = os.environ.get("SMART_SUMMARIZE_TMPDIR")
     if configured:
         return Path(configured).expanduser()
-    return Path(tempfile.gettempdir())
+    skill_dir = Path(__file__).resolve().parent.parent
+    managed_tmp = skill_dir / "temp"
+    try:
+        managed_tmp.mkdir(parents=True, exist_ok=True)
+        return managed_tmp
+    except OSError:
+        return Path(tempfile.gettempdir())
 
 TEMP_BASE_DIR = _default_temp_base_dir()
 

@@ -12,3 +12,6 @@ scripts/__pycache__/
 __pycache__/
 .git/
 dist/
+
+# 技能目录内自管临时目录（默认临时根，运行时产物不入库）
+temp/

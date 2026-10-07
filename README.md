@@ -81,7 +81,7 @@ python scripts/extract.py --file lecture.mp3 --output srt                  # SRT
 | ---------------------------------------- | ----------------------------------------------------------------------- |
 | `SMART_SUMMARIZE_PYTHON`                 | 指定 Python 解释器（默认 PATH 中的 `python`）                                      |
 | `SMART_SUMMARIZE_HOME`                   | 受管组件目录（默认 `~/.smart-summarize`）                                         |
-| `SMART_SUMMARIZE_TMPDIR`                 | 临时目录（默认系统临时目录）                                                          |
+| `SMART_SUMMARIZE_TMPDIR`                 | 临时目录（默认技能目录下 `temp/`，不可写时回退系统临时目录）                          |
 | `SMART_SUMMARIZE_FFMPEG`                 | 指定 ffmpeg 可执行文件                                                         |
 | `SMART_SUMMARIZE_WHISPERCPP_CLI`         | 指定 whisper-cli 可执行文件                                                    |
 | `SMART_SUMMARIZE_WHISPERCPP_DIR`         | whisper.cpp 可执行文件搜索目录                                                   |

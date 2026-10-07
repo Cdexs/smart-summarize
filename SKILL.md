@@ -125,7 +125,8 @@ B站字幕、网页正文、文本/PDF/Word/EPUB 通常不使用本工具的临�
 临时根目录解析顺序：
 
 1. `SMART_SUMMARIZE_TMPDIR`（显式指定，支持 `~`）；
-2. 其余一律使用 Python `tempfile.gettempdir()`：Windows 通常为 `%LOCALAPPDATA%\Temp`，macOS 为 `/var/folders/.../T`，Linux/WSL 为 `/tmp`。
+2. 技能目录下的 `temp/`（默认值，自动创建，与 SKILL.md、`scripts/` 同级）；
+3. 技能目录不可写时退回 Python `tempfile.gettempdir()`：Windows 通常为 `%LOCALAPPDATA%\Temp`，macOS 为 `/var/folders/.../T`，Linux/WSL 为 `/tmp`。
 
 例如：
 
@@ -244,6 +245,11 @@ cookies 具有账号会话权限，不能提交到技能仓库、复制到其他
 | B站无字幕                          | 该视频没有 CC 字幕，API 返回 `success:false`，属正常                 |
 
 ## 更新日志
+
+### v0.5.2（默认临时目录收敛到技能目录）
+- 默认临时根目录由系统临时目录改为**技能目录下的 `temp/`**（自动创建，与 SKILL.md、`scripts/` 同级），中间文件不再散落到系统临时目录；
+- `SMART_SUMMARIZE_TMPDIR` 显式配置优先级不变；技能目录只读不可写时自动回退系统临时目录；
+- `ss_*` 前缀与 72 小时遗留清扫机制不变；slice protocol 的 `ss_slice_<hash>` 分片同样落在该目录下。
 
 ### v0.5.1（组件安装链路修复 + 提取质量优化）
 - 修复 ffmpeg 缺失时确认安装报"未知组件类型"的死代码缺陷，自动安装链路恢复可用；

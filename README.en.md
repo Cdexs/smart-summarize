@@ -82,7 +82,7 @@ Note: Python libraries require **no pre-installation**; everything is detected o
 | ---------------------------------------- | --------------------------------------------------------------------------- |
 | `SMART_SUMMARIZE_PYTHON`                 | Python interpreter (defaults to `python` on PATH)                          |
 | `SMART_SUMMARIZE_HOME`                   | Managed component directory (default `~/.smart-summarize`)                  |
-| `SMART_SUMMARIZE_TMPDIR`                 | Temp directory (defaults to the system temp dir)                            |
+| `SMART_SUMMARIZE_TMPDIR`                 | Temp directory (defaults to `temp/` inside the skill dir; falls back to the system temp dir if not writable) |
 | `SMART_SUMMARIZE_FFMPEG`                 | Path to the ffmpeg executable                                              |
 | `SMART_SUMMARIZE_WHISPERCPP_CLI`         | Path to the whisper-cli executable                                         |
 | `SMART_SUMMARIZE_WHISPERCPP_DIR`         | Search directory for whisper.cpp executables                               |
