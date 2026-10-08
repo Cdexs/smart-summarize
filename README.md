@@ -88,6 +88,8 @@ python scripts/extract.py --file lecture.mp3 --output srt                  # SRT
 | `SMART_SUMMARIZE_WHISPERCPP_MODELS_DIR`  | ggml 模型目录                                                               |
 | `SMART_SUMMARIZE_YOUTUBE_COOKIES`        | YouTube cookies 文件（默认 `~/.smart-summarize/cookies/youtube-cookies.txt`） |
 | `SMART_SUMMARIZE_WHISPERCPP_CMAKE_FLAGS` | 源码构建 whisper.cpp 时追加的 CMake 参数                                          |
+| `SMART_SUMMARIZE_HF_MIRROR`              | HuggingFace 镜像源（如 `https://hf-mirror.com`；兼容 `HF_ENDPOINT`；官方源不可达时也会自动回退该镜像）  |
+| `SMART_SUMMARIZE_PIP_INDEX_URL`          | pip 包索引源（默认源失败/极慢时自动尝试清华/腾讯镜像）                                |
 
 ## 超大文档总结优化（slice protocol）
 

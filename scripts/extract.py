@@ -10,6 +10,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v3.5: 运行时检测缺失组件（ffmpeg/whisper-cli/ggml 模型），提示大小并经用户确认后下载安装，随后继续原任务
 - v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
 - v0.5.2: 默认临时目录改为技能目录下 temp/（SMART_SUMMARIZE_TMPDIR 优先级不变；技能目录不可写时回退系统 temp）
+- v0.5.3: 修复 whisper.cpp 预编译资产 404（latest release 资产为空，改 GitHub API 定位 + 固定版本兜底）；ggml 模型下载支持镜像回退（huggingface.co 不可达时自动切换 hf-mirror.com，兼容 SMART_SUMMARIZE_HF_MIRROR 与 HF_ENDPOINT）；pip 安装支持镜像回退（默认源失败自动切换清华/腾讯镜像，SMART_SUMMARIZE_PIP_INDEX_URL 可指定）
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -660,6 +661,30 @@ def _import_ok(name):
     except Exception:
         return False
 
+# pip 默认源（PyPI）在部分网络极慢/不可达（如 simple 索引超时导致 No matching
+# distribution found）。候选：SMART_SUMMARIZE_PIP_INDEX_URL 显式指定 → 默认源 →
+# 公共镜像（清华 TUNA / 腾讯云）；默认源失败时自动切换，stderr 标注实际来源。
+PIP_FALLBACK_INDEXES = (
+    "https://pypi.tuna.tsinghua.edu.cn/simple",
+    "https://mirrors.cloud.tencent.com/pypi/simple",
+)
+
+def _pip_index_urls():
+    """pip 包索引候选（按序）：显式配置 → pip 默认源（PyPI） → 公共镜像"""
+    urls = []
+    configured = os.environ.get("SMART_SUMMARIZE_PIP_INDEX_URL")
+    if configured:
+        urls.append(configured)
+    urls.append("")  # 空 = 不加 --index-url，用 pip 默认源
+    urls.extend(PIP_FALLBACK_INDEXES)
+    return list(dict.fromkeys(urls))
+
+def _pip_install_cmd(index_url, packages):
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade"]
+    if index_url:
+        cmd += ["--index-url", index_url]
+    return cmd + list(packages)
+
 def _missing_pipelib_kinds(groups):
     """按用途组检测缺失的 Python 库，返回 'pip:<group>' kind 列表。"""
     kinds = []
@@ -678,6 +703,21 @@ def _missing_pipelib_kinds(groups):
     return kinds
 
 MODEL_URL_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+# huggingface.co 在部分网络被 DNS 劫持/屏蔽而不可达；hf-mirror.com 为同路径结构的公共镜像。
+# SMART_SUMMARIZE_HF_MIRROR 可显式指定镜像源（优先级最高）。
+HF_FALLBACK_MIRRORS = ("https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/",)
+
+def _model_url_candidates(fname):
+    """模型下载 URL 候选（按序）：SMART_SUMMARIZE_HF_MIRROR / HF_ENDPOINT（huggingface_hub
+    惯例变量）显式镜像 → 官方源 → 公共镜像"""
+    configured = os.environ.get("SMART_SUMMARIZE_HF_MIRROR") or os.environ.get("HF_ENDPOINT")
+    bases = []
+    if configured:
+        bases.append(configured.rstrip("/"))
+    bases.append(MODEL_URL_BASE.rstrip("/"))
+    bases.extend(m.rstrip("/") for m in HF_FALLBACK_MIRRORS)
+    return [b + "/" + fname for b in dict.fromkeys(bases)]
+
 WHISPERCPP_REPO_URL = "https://github.com/ggml-org/whisper.cpp"
 # HEAD 拿不到实际大小时的回退估计值（字节）
 KNOWN_MODEL_SIZES = {
@@ -694,10 +734,10 @@ def _human_size(n):
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
         size /= 1024
 
-def _content_length(url):
+def _content_length(url, timeout=30):
     try:
         import requests
-        r = requests.head(url, allow_redirects=True, timeout=30)
+        r = requests.head(url, allow_redirects=True, timeout=timeout)
         return int(r.headers.get("Content-Length", 0) or 0)
     except Exception:
         return 0
@@ -787,6 +827,35 @@ WHISPERCPP_CUBLAS_ASSETS = [
     "whisper-cublas-12.4.0-bin-x64.zip",
 ]
 
+# v1.9.3 起的版本号 release 资产为空（预编译资产改挂在 commit 构建 release 上），
+# releases/latest/download/<asset> 恒 404。下载前先用 GitHub API 定位最新含该
+# 资产的 release；API 被限流/不可达时回退最近一个带资产的版本 tag（v1.9.2）。
+WHISPERCPP_PINNED_RELEASE = "v1.9.2"
+
+def _whispercpp_asset_urls(asset):
+    """whisper.cpp 预编译资产候选下载 URL（按序）：
+    1) GitHub API 解析最新含该资产的 release（版本 tag 或 commit 构建，自适应未来变化）；
+    2) releases/latest/download（若 latest 恢复携带资产）；
+    3) 固定版本 tag 兜底。"""
+    urls = []
+    try:
+        import requests
+        r = requests.get(
+            "https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30",
+            timeout=30, headers={"Accept": "application/vnd.github+json"})
+        if r.status_code == 200:
+            for rel in r.json():
+                hit = next((a for a in rel.get("assets", [])
+                            if a.get("name") == asset and a.get("browser_download_url")), None)
+                if hit:
+                    urls.append(hit["browser_download_url"])
+                    break
+    except Exception:
+        pass
+    urls.append(f"https://github.com/ggml-org/whisper.cpp/releases/latest/download/{asset}")
+    urls.append(f"https://github.com/ggml-org/whisper.cpp/releases/download/{WHISPERCPP_PINNED_RELEASE}/{asset}")
+    return list(dict.fromkeys(urls))
+
 
 def _detect_gpu():
     """检测本机 GPU 厂商，返回 (vendor, device_desc, gpu_hint)。"""
@@ -860,12 +929,22 @@ def install_whispercli():
         prebuilt_assets += WHISPERCPP_CUBLAS_ASSETS
     prebuilt_assets += [WHISPERCPP_PREBUILT_ASSETS.get((os.name, platform.machine().upper()))]
     for asset in [a for a in prebuilt_assets if a]:
-        url = f"https://github.com/ggml-org/whisper.cpp/releases/latest/download/{asset}"
         try:
             MANAGED_BIN.mkdir(parents=True, exist_ok=True)
             import zipfile
             with tempfile.TemporaryDirectory(prefix="ss_wcpp_dl_") as td:
-                archive = _http_download(url, Path(td) / asset, asset)
+                archive = None
+                last_err = None
+                for url in _whispercpp_asset_urls(asset):
+                    try:
+                        archive = _http_download(url, Path(td) / asset, asset)
+                        break
+                    except Exception as e:
+                        last_err = e
+                        print(f"  ⚠️ 下载来源不可用 {url}（{e}）", file=sys.stderr)
+                if archive is None:
+                    print(f"  ⚠️ 官方预编译包 {asset} 所有来源均失败（{last_err}），尝试下一个方式", file=sys.stderr)
+                    continue
                 with zipfile.ZipFile(archive) as zf:
                     zf.extractall(td)
                 built = None
@@ -891,7 +970,7 @@ def install_whispercli():
                               "安装 Vulkan SDK 后删除受管二进制重跑可构建 Vulkan GPU 版", file=sys.stderr)
                     return dest
         except Exception as e:
-            print(f"  ⚠️ 官方预编译包 {asset} 下载失败（{e}），尝试下一个方式", file=sys.stderr)
+            print(f"  ⚠️ 官方预编译包 {asset} 处理失败（{e}），尝试下一个方式", file=sys.stderr)
 
     # 3) 源码构建兜底（需要 git/cmake/编译器）
     for tool in ("git", "cmake"):
@@ -977,12 +1056,36 @@ def _model_download_dir():
     return MANAGED_MODELS
 
 def install_model(model_name):
-    """用户确认后从 HuggingFace 下载 ggml 模型，返回模型文件路径"""
+    """用户确认后下载 ggml 模型，返回模型文件路径。
+    下载源按序尝试：SMART_SUMMARIZE_HF_MIRROR → huggingface.co → 公共镜像
+    （hf-mirror.com）；官方源被 DNS 劫持/不可达时自动切换，stderr 标注实际来源。"""
     fname = WHISPERCPP_GGML_MAP.get(model_name, f"ggml-{model_name}.bin")
     dest = _model_download_dir() / fname
     if dest.exists():
         return dest
-    return _http_download(MODEL_URL_BASE + fname, dest, fname)
+    candidates = _model_url_candidates(fname)
+    last_err = None
+    for i, url in enumerate(candidates):
+        try:
+            out = _http_download(url, dest, fname)
+            if i > 0:
+                host = re.match(r"https?://([^/]+)", url)
+                print(f"  ℹ️ 已改用备用来源完成下载: {host.group(1) if host else url}", file=sys.stderr)
+            return out
+        except Exception as e:
+            last_err = e
+            part = dest.with_suffix(dest.suffix + ".part")
+            try:
+                if part.exists():
+                    part.unlink()
+            except Exception:
+                pass
+            host = re.match(r"https?://([^/]+)", url)
+            more = "，尝试下一个来源" if i < len(candidates) - 1 else ""
+            print(f"  ⚠️ 模型下载失败（{host.group(1) if host else url}）: {e}{more}", file=sys.stderr)
+    raise RuntimeError(
+        f"模型下载失败（已尝试 {len(candidates)} 个来源）: {last_err}；"
+        "若 huggingface.co 被墙/DNS 劫持，可设置 SMART_SUMMARIZE_HF_MIRROR（如 https://hf-mirror.com）后重试")
 
 def _missing_dep_kinds(model_name):
     kinds = []
@@ -1002,7 +1105,8 @@ def _dep_detail(kind):
         purpose = spec["purpose"] if spec else "Python 库"
         return {"kind": kind, "name": pkgs,
                 "purpose": purpose,
-                "source": f"安装到当前 Python 解释器：\"{sys.executable}\" -m pip install {pkgs}",
+                "source": f"安装到当前 Python 解释器：\"{sys.executable}\" -m pip install {pkgs}"
+                          "（默认源失败时自动切换清华/腾讯镜像；SMART_SUMMARIZE_PIP_INDEX_URL 可指定）",
                 "est_size": "合计数 MB"}
     if kind == "ffmpeg":
         url = _ffmpeg_source_url()
@@ -1018,23 +1122,38 @@ def _dep_detail(kind):
                 "est_size": "仓库约 60MB + 编译时间"}
     model_name = kind.split(":", 1)[1]
     fname = WHISPERCPP_GGML_MAP.get(model_name, f"ggml-{model_name}.bin")
-    size = _content_length(MODEL_URL_BASE + fname) or KNOWN_MODEL_SIZES.get(fname, 0)
+    size = 0
+    for u in _model_url_candidates(fname):
+        size = _content_length(u, timeout=10)
+        if size:
+            break
     return {"kind": kind, "name": fname,
             "purpose": f"whisper 转录模型 ({model_name})",
-            "source": MODEL_URL_BASE + fname,
+            "source": _model_url_candidates(fname)[0]
+                      + "（官方源不可达时自动切换公共镜像 hf-mirror.com；可用 SMART_SUMMARIZE_HF_MIRROR 指定）",
             "est_size": _human_size(size)}
 
 def _install_dep(kind):
     if kind.startswith("pip:"):
         group = kind.split(":", 1)[1]
         spec = PIP_LIB_GROUPS[group]
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade"] + spec["packages"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if r.returncode != 0:
-            manual = " ".join(cmd)
-            tail = ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
-            raise RuntimeError(f"pip 安装失败: {tail}；可手动执行以下命令 {manual}")
-        return f"{Path(sys.executable)} -m pip（{' '.join(spec['packages'])}）"
+        candidates = _pip_index_urls()
+        last_tail = ""
+        for i, index_url in enumerate(candidates):
+            cmd = _pip_install_cmd(index_url, spec["packages"])
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if r.returncode == 0:
+                if index_url:
+                    print(f"  ℹ️ 已通过源 {index_url} 完成安装", file=sys.stderr)
+                return f"{Path(sys.executable)} -m pip（{' '.join(spec['packages'])}）"
+            last_tail = ((r.stderr or "") + (r.stdout or "")).strip()[-300:]
+            src = index_url or "pip 默认源（PyPI）"
+            more = "，尝试下一个来源" if i < len(candidates) - 1 else ""
+            print(f"  ⚠️ pip 安装失败（{src}）: {last_tail[-120:]}{more}", file=sys.stderr)
+        raise RuntimeError(
+            "pip 安装失败（已尝试默认源与镜像）: " + last_tail
+            + "；可手动执行 '" + " ".join(_pip_install_cmd(candidates[0], spec["packages"]))
+            + "'，或设置 SMART_SUMMARIZE_PIP_INDEX_URL 指定镜像源")
     if kind == "ffmpeg":
         return install_ffmpeg()
     if kind == "whisper-cli":

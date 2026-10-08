@@ -89,6 +89,8 @@ Note: Python libraries require **no pre-installation**; everything is detected o
 | `SMART_SUMMARIZE_WHISPERCPP_MODELS_DIR`  | GGML model directory                                                       |
 | `SMART_SUMMARIZE_YOUTUBE_COOKIES`        | YouTube cookies file (defaults to `~/.smart-summarize/cookies/youtube-cookies.txt`) |
 | `SMART_SUMMARIZE_WHISPERCPP_CMAKE_FLAGS` | Extra CMake flags when building whisper.cpp from source                     |
+| `SMART_SUMMARIZE_HF_MIRROR`              | HuggingFace mirror (e.g. `https://hf-mirror.com`; also honors `HF_ENDPOINT`; automatic fallback when huggingface.co is unreachable) |
+| `SMART_SUMMARIZE_PIP_INDEX_URL`          | pip package index (Tsinghua/Tencent mirrors are tried automatically when the default index fails or is very slow) |
 
 ## Large-document summarization optimization (slice protocol)
 

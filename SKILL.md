@@ -26,7 +26,7 @@ compatibility: Windows / macOS / Linux + Python 3.9+；音视频转录另需 ffm
 
 ## 安装依赖
 
-**无需要预先安装任何 Python 库。** 首次提取某类内容时（如第一个 PDF），脚本会运行时检测所需库：缺失时列出名称/用途/安装命令，经用户确认后用当前解释器 `pip` 安装并自动继续；agent 在征得用户同意后可加 `--download-deps` 非交互执行。
+**无需要预先安装任何 Python 库。** 首次提取某类内容时（如第一个 PDF），脚本会运行时检测所需库：缺失时列出名称/用途/安装命令，经用户确认后用当前解释器 `pip` 安装并自动继续；agent 在征得用户同意后可加 `--download-deps` 非交互执行。pip 默认源不可达/极慢时自动切换国内镜像（清华 TUNA/腾讯云），`SMART_SUMMARIZE_PIP_INDEX_URL` 可指定索引源。
 
 各功能对应的库（仅供参考，通常无需手动装）：
 
@@ -159,9 +159,9 @@ export SMART_SUMMARIZE_TMPDIR="$HOME/.cache/smart-summarize-tmp"
 - ffmpeg：Windows 用 gyan.dev zip、macOS 用 evermeet.cx、Linux x86_64/arm64 用 johnvansickle 静态包；安装到 `SMART_SUMMARIZE_HOME`（默认 `~/.smart-summarize/bin`）。
 - whisper-cli：按硬件自动选版本安装：
   ①macOS/Linux 有 Homebrew 时 `brew install whisper-cpp`（macOS Metal 默认启用）；
-  ②Windows：检测到 **NVIDIA GPU** 时优先下载官方 **cublas 预编译版**（自带 CUDA 运行库，无需 CUDA Toolkit，约 270MB）；否则下载官方 CPU 预编译 zip，并按 GPU 厂商给出升级指引（AMD/Intel：装 Vulkan SDK 后删受管二进制重跑即可源码构建 Vulkan 版）；
+  ②Windows：检测到 **NVIDIA GPU** 时优先下载官方 **cublas 预编译版**（自带 CUDA 运行库，无需 CUDA Toolkit，约 270MB）；否则下载官方 CPU 预编译 zip，并按 GPU 厂商给出升级指引（AMD/Intel：装 Vulkan SDK 后删受管二进制重跑即可源码构建 Vulkan 版）。预编译包下载地址经 GitHub API 动态定位（上游 v1.9.3+ 版本 release 资产为空，自动选择最新含资产的 release/commit 构建）；
   ③源码构建兜底（需 git/cmake/编译器），构建时自动按硬件选后端：NVIDIA + CUDA Toolkit → CUDA；AMD + ROCm → HIP（自动检测 gfx 架构）；有 Vulkan SDK → Vulkan（A 卡核显如 Radeon 780M、Intel 核显的唯一官方 GPU 路径）；都没有则 CPU（并明确告知）。也可用 `SMART_SUMMARIZE_WHISPERCPP_CMAKE_FLAGS` 追加自定义 CMake 参数；需要换后端时删除 `~/.smart-summarize/whisper.cpp` 构建目录及受管 bin 中的二进制后重试。
-- ggml 模型：从 HuggingFace `ggerganov/whisper.cpp` 下载（large-v3-turbo 约 1.6GB，q5_0 约 560MB），存到上述模型目录首个可用位置。
+- ggml 模型：从 HuggingFace `ggerganov/whisper.cpp` 下载（large-v3-turbo 约 1.6GB，q5_0 约 560MB），存到上述模型目录首个可用位置；huggingface.co 不可达（被墙/DNS 劫持）时自动切换公共镜像 hf-mirror.com，`SMART_SUMMARIZE_HF_MIRROR` 可指定镜像源。
 
 ### 默认下载版本矩阵（whisper-cli）
 
@@ -243,8 +243,15 @@ cookies 具有账号会话权限，不能提交到技能仓库、复制到其他
 | YouTube 提示需要 cookies                     | 按提示用浏览器扩展导出 Netscape 格式 cookies 保存到 `~/.smart-summarize/cookies/youtube-cookies.txt` 后重试 |
 | PDF 提取为空                                   | 扫描件没有文字层，属正常；本工具不做 OCR                                 |
 | B站无字幕                          | 该视频没有 CC 字幕，API 返回 `success:false`，属正常                 |
+| 组件下载 404 / HuggingFace 不可达 | v0.5.3 起自动定位含资产的 release 并在 HF 不可达时切换 hf-mirror.com 镜像；也可设 `SMART_SUMMARIZE_HF_MIRROR` 指定镜像 |
 
 ## 更新日志
+
+### v0.5.3（组件下载链路网络适配）
+- 修复 whisper.cpp 预编译资产 404：上游 v1.9.3 起版本号 release 资产为空（资产改挂在 commit 构建 release 上），`releases/latest/download/<asset>` 恒 404；现下载前经 GitHub API 定位最新含目标资产的 release，API 不可用/被限流时回退 v1.9.2 固定版本；
+- ggml 模型下载支持镜像回退：huggingface.co 被墙/DNS 劫持时自动切换公共镜像 hf-mirror.com（stderr 标注实际来源），`SMART_SUMMARIZE_HF_MIRROR` 可显式指定镜像源（优先级最高，兼容 huggingface_hub 惯例的 `HF_ENDPOINT`）；
+- pip 库安装支持镜像回退：默认源（PyPI）失败/极慢时自动切换清华 TUNA、腾讯云镜像（stderr 标注实际来源），`SMART_SUMMARIZE_PIP_INDEX_URL` 可指定索引源；
+- 组件清单中的模型体积探测同样走镜像候选，来源说明同步更新。
 
 ### v0.5.2（默认临时目录收敛到技能目录）
 - 默认临时根目录由系统临时目录改为**技能目录下的 `temp/`**（自动创建，与 SKILL.md、`scripts/` 同级），中间文件不再散落到系统临时目录；
