@@ -23,10 +23,18 @@
 
 ## 安装
 
-**从 npm 安装（推荐）：**
+**使用 skills CLI 安装（推荐）：**
 
 ```bash
-npm install @cdexs/smart-summarize
+npx skills add Cdexs/smart-summarize -g
+```
+
+技能会安装到用户级技能目录（`~/.agents/skills/smart-summarize`），并自动链接到支持的 agent 宿主（Claude Code / Codex / Cursor / OpenClaw 等）。
+
+更新到最新版：
+
+```bash
+npx skills update
 ```
 
 **pi 用户一键安装（自动装到技能目录）：**
@@ -35,7 +43,13 @@ npm install @cdexs/smart-summarize
 pi install npm:@cdexs/smart-summarize
 ```
 
-安装后技能包位于 `node_modules/@cdexs/smart-summarize/`，把该目录（或整个目录）放到 agent 的技能目录（如 `~/.pi/agent/skills/smart-summarize`），或直接指定路径运行：
+**npm 安装（自行管理技能目录的场景）：**
+
+```bash
+npm install @cdexs/smart-summarize
+```
+
+npm 安装后技能包位于 `node_modules/@cdexs/smart-summarize/`，把该目录放到 agent 的技能目录（如 `~/.pi/agent/skills/smart-summarize`），或直接指定路径运行：
 
 ```bash
 python node_modules/@cdexs/smart-summarize/scripts/extract.py --file demo.pdf

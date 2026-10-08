@@ -23,10 +23,18 @@ Cross-platform: Windows / macOS / Linux / WSL.
 
 ## Install
 
-**Install from npm (recommended):**
+**Install with the skills CLI (recommended):**
 
 ```bash
-npm install @cdexs/smart-summarize
+npx skills add Cdexs/smart-summarize -g
+```
+
+This installs the skill into your user-level skills directory (`~/.agents/skills/smart-summarize`) and links it into supported agent hosts (Claude Code / Codex / Cursor / OpenClaw, etc.).
+
+Update to the latest version:
+
+```bash
+npx skills update
 ```
 
 **One-liner for pi users (installs straight into the skill directory):**
@@ -35,7 +43,13 @@ npm install @cdexs/smart-summarize
 pi install npm:@cdexs/smart-summarize
 ```
 
-The skill lands in `node_modules/@cdexs/smart-summarize/`. Copy it (or point directly at it) into your agent's skill directory (e.g. `~/.pi/agent/skills/smart-summarize`), or run it in place:
+**npm install (for managing the skill directory yourself):**
+
+```bash
+npm install @cdexs/smart-summarize
+```
+
+The package lands in `node_modules/@cdexs/smart-summarize/`. Copy that directory into your agent's skill directory (e.g. `~/.pi/agent/skills/smart-summarize`), or run it in place:
 
 ```bash
 python node_modules/@cdexs/smart-summarize/scripts/extract.py --file demo.pdf
