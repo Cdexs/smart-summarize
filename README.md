@@ -31,10 +31,10 @@ npx skills add Cdexs/smart-summarize -g
 
 技能会安装到用户级技能目录（`~/.agents/skills/smart-summarize`），并自动链接到支持的 agent 宿主（Claude Code / Codex / Cursor / OpenClaw 等）。
 
-更新到最新版：
+更新到最新版（对应 `-g` 用户级安装；也可 `npx skills update smart-summarize` 只更新指定技能）：
 
 ```bash
-npx skills update
+npx skills update -g
 ```
 
 **pi 用户一键安装（自动装到技能目录）：**

@@ -31,10 +31,10 @@ npx skills add Cdexs/smart-summarize -g
 
 This installs the skill into your user-level skills directory (`~/.agents/skills/smart-summarize`) and links it into supported agent hosts (Claude Code / Codex / Cursor / OpenClaw, etc.).
 
-Update to the latest version:
+Update to the latest version (matches the `-g` user-level install; add a skill name to update just that one, e.g. `npx skills update smart-summarize`):
 
 ```bash
-npx skills update
+npx skills update -g
 ```
 
 **One-liner for pi users (installs straight into the skill directory):**
