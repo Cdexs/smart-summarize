@@ -11,6 +11,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
 - v0.5.2: 默认临时目录改为技能目录下 temp/（SMART_SUMMARIZE_TMPDIR 优先级不变；技能目录不可写时回退系统 temp）
 - v0.5.3: 修复 whisper.cpp 预编译资产 404（latest release 资产为空，改 GitHub API 定位 + 固定版本兜底）；ggml 模型下载支持镜像回退（huggingface.co 不可达时自动切换 hf-mirror.com，兼容 SMART_SUMMARIZE_HF_MIRROR 与 HF_ENDPOINT）；pip 安装支持镜像回退（默认源失败自动切换清华/腾讯镜像，SMART_SUMMARIZE_PIP_INDEX_URL 可指定）
+- v0.5.4: 组件下载新增技能仓库自托管首要来源（components-v1 Release：whisper-cli Vulkan+CPU 通用构建、ggml-large-v3-turbo 模型），官方源/镜像降为回退
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -707,16 +708,29 @@ MODEL_URL_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 # SMART_SUMMARIZE_HF_MIRROR 可显式指定镜像源（优先级最高）。
 HF_FALLBACK_MIRRORS = ("https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/",)
 
+# 技能仓库自托管组件（GitHub Release 资产；git 仓库单文件限 100MB，大文件只能走
+# Release 资产通道）。候选链以自托管为首要来源，官方源/镜像保留为回退——外部源
+# 变动不再直接导致下载失败。资产清单、SHA256 与许可说明见仓库 models/README.md。
+SELF_HOSTED_COMPONENTS_TAG = "components-v1"
+SELF_HOSTED_BASE_URL = (
+    "https://github.com/Cdexs/smart-summarize/releases/download/"
+    + SELF_HOSTED_COMPONENTS_TAG + "/"
+)
+SELF_HOSTED_MODEL_FILES = {"ggml-large-v3-turbo.bin"}
+SELF_HOSTED_WHISPER_ASSETS = {"whisper-bin-x64.zip"}
+
 def _model_url_candidates(fname):
     """模型下载 URL 候选（按序）：SMART_SUMMARIZE_HF_MIRROR / HF_ENDPOINT（huggingface_hub
-    惯例变量）显式镜像 → 官方源 → 公共镜像"""
+    惯例变量）显式镜像 → 技能仓库自托管（如有该文件）→ 官方源 → 公共镜像"""
+    urls = []
     configured = os.environ.get("SMART_SUMMARIZE_HF_MIRROR") or os.environ.get("HF_ENDPOINT")
-    bases = []
     if configured:
-        bases.append(configured.rstrip("/"))
-    bases.append(MODEL_URL_BASE.rstrip("/"))
-    bases.extend(m.rstrip("/") for m in HF_FALLBACK_MIRRORS)
-    return [b + "/" + fname for b in dict.fromkeys(bases)]
+        urls.append(configured.rstrip("/") + "/" + fname)
+    if fname in SELF_HOSTED_MODEL_FILES:
+        urls.append(SELF_HOSTED_BASE_URL + fname)
+    bases = [MODEL_URL_BASE.rstrip("/")] + [m.rstrip("/") for m in HF_FALLBACK_MIRRORS]
+    urls.extend(b + "/" + fname for b in dict.fromkeys(bases))
+    return urls
 
 WHISPERCPP_REPO_URL = "https://github.com/ggml-org/whisper.cpp"
 # HEAD 拿不到实际大小时的回退估计值（字节）
@@ -738,6 +752,8 @@ def _content_length(url, timeout=30):
     try:
         import requests
         r = requests.head(url, allow_redirects=True, timeout=timeout)
+        if r.status_code >= 400:
+            return 0
         return int(r.headers.get("Content-Length", 0) or 0)
     except Exception:
         return 0
@@ -834,10 +850,13 @@ WHISPERCPP_PINNED_RELEASE = "v1.9.2"
 
 def _whispercpp_asset_urls(asset):
     """whisper.cpp 预编译资产候选下载 URL（按序）：
-    1) GitHub API 解析最新含该资产的 release（版本 tag 或 commit 构建，自适应未来变化）；
-    2) releases/latest/download（若 latest 恢复携带资产）；
-    3) 固定版本 tag 兜底。"""
+    1) 技能仓库自托管（如有该资产；Windows x64 Vulkan+CPU 通用构建）；
+    2) GitHub API 解析最新含该资产的 release（版本 tag 或 commit 构建，自适应未来变化）；
+    3) releases/latest/download（若 latest 恢复携带资产）；
+    4) 固定版本 tag 兜底。"""
     urls = []
+    if asset in SELF_HOSTED_WHISPER_ASSETS:
+        urls.append(SELF_HOSTED_BASE_URL + asset)
     try:
         import requests
         r = requests.get(
@@ -935,9 +954,11 @@ def install_whispercli():
             with tempfile.TemporaryDirectory(prefix="ss_wcpp_dl_") as td:
                 archive = None
                 last_err = None
+                used_url = None
                 for url in _whispercpp_asset_urls(asset):
                     try:
                         archive = _http_download(url, Path(td) / asset, asset)
+                        used_url = url
                         break
                     except Exception as e:
                         last_err = e
@@ -961,6 +982,8 @@ def install_whispercli():
                             print(f"  + DLL: {extra.name}", file=sys.stderr)
                     if asset.startswith("whisper-cublas"):
                         print(f"  🎮 已安装 NVIDIA cublas GPU 版（自带 CUDA 运行库，无需 CUDA Toolkit）", file=sys.stderr)
+                    elif used_url and used_url.startswith(SELF_HOSTED_BASE_URL):
+                        print("  🎮 已安装技能仓库自托管构建（Vulkan + CPU 通用）：AMD/Intel GPU 经 Vulkan 加速，无 Vulkan 环境自动回退 CPU", file=sys.stderr)
                     elif gpu_vendor == "amd":
                         print(f"  ⚠️ 已安装 CPU 版。检测到 AMD GPU（{gpu_name}）但官方无 A 卡 GPU 预编译；"
                               "如需 GPU 加速：安装 Vulkan SDK 后删除受管二进制重跑（将源码构建 Vulkan 版），"
@@ -1118,19 +1141,23 @@ def _dep_detail(kind):
     if kind == "whisper-cli":
         return {"kind": kind, "name": "whisper-cli (whisper.cpp)",
                 "purpose": "本地语音转录",
-                "source": "依次尝试：brew 预编译包 → GitHub 官方预编译版 → 源码构建（需 git/cmake/编译器）",
+                "source": "依次尝试：brew 预编译包 → 技能仓库自托管构建 → GitHub 官方预编译版 → 源码构建（需 git/cmake/编译器）",
                 "est_size": "仓库约 60MB + 编译时间"}
     model_name = kind.split(":", 1)[1]
     fname = WHISPERCPP_GGML_MAP.get(model_name, f"ggml-{model_name}.bin")
+    candidates = _model_url_candidates(fname)
     size = 0
-    for u in _model_url_candidates(fname):
+    for u in candidates:
         size = _content_length(u, timeout=10)
         if size:
             break
+    size = size or KNOWN_MODEL_SIZES.get(fname, 0)
+    note = ("（技能仓库自托管；不可达时自动回退官方源与公共镜像 hf-mirror.com）"
+            if fname in SELF_HOSTED_MODEL_FILES else
+            "（不可达时自动切换公共镜像 hf-mirror.com；可用 SMART_SUMMARIZE_HF_MIRROR 指定）")
     return {"kind": kind, "name": fname,
             "purpose": f"whisper 转录模型 ({model_name})",
-            "source": _model_url_candidates(fname)[0]
-                      + "（官方源不可达时自动切换公共镜像 hf-mirror.com；可用 SMART_SUMMARIZE_HF_MIRROR 指定）",
+            "source": candidates[0] + note,
             "est_size": _human_size(size)}
 
 def _install_dep(kind):
