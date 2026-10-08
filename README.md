@@ -16,9 +16,10 @@
 
 - **纯提取**：不调用任何 LLM，输出 JSON/文本/SRT，由当前 agent 阅读总结
 - **零硬编码路径**：所有组件按 环境变量 → PATH → 用户目录（`~/.smart-summarize`）的顺序发现
-- **运行时按需安装**：首次使用音视频转录时检测缺失组件，列出名称/用途/来源/预计大小，经用户确认后下载安装，随后自动继续；不会静默下载
+- **运行时按需安装**：首次使用音视频转录时检测缺失组件，列出名称/用途/来源/预计大小，经用户确认后下载安装，随后自动继续（多轮缺失会依次确认、链式处理，直到任务跑通）；不会静默下载
 - **隐私安全**：不携带、不读取技能目录内的任何 cookies；YouTube cookies 默认从 `~/.smart-summarize/cookies/youtube-cookies.txt` 读取（由用户手动导出放置），仅遇登录墙时才提示需要
-- **GPU 中立**：是否启用 GPU 取决于用户安装的 whisper.cpp 构建（Vulkan/Metal/CUDA）；自动构建时会检测工具链并如实告知
+- **GPU 中立**：转录完成后 stderr 标注实际使用的计算后端。Windows x64 默认安装 Vulkan + CPU 通用构建——AMD/Intel 核显开箱即用 Vulkan 加速（NVIDIA 优先官方 cublas GPU 版）；macOS 经 brew 默认启用 Metal；源码构建按硬件检测 CUDA/HIP/Vulkan 工具链并如实告知
+- **下载源自动回退**：whisper-cli 与模型下载内置多来源候选链（技能仓库自托管构建、HuggingFace 官方源、国内镜像），某来源不可达时自动切换下一个并在 stderr 标注实际来源
 
 ## 安装
 
@@ -71,7 +72,7 @@ python scripts/extract.py --file lecture.mp3 --output srt                  # SRT
 | YouTube 字幕 | `yt-dlp` | 同上；另见下行 Node.js |
 | YouTube 受限内容 | **Node.js**（`node` 在 PATH） | yt-dlp 需 JS runtime；未安装时见故障排除 |
 | Word `.doc`（老格式） | **pandoc**（PATH） | 仅需此格式时装；不自动下载 |
-| 音视频转录 | **ffmpeg + whisper-cli + ggml 模型** | 首次使用时列出名称/用途/来源/预计大小（合计约 1.6–2.4 GB），经确认后自动下载到 `~/.smart-summarize`，也可用环境变量指向已有安装 |
+| 音视频转录 | **ffmpeg + whisper-cli + ggml 模型** | 首次使用时列出名称/用途/来源/预计大小（合计约 1.6–2.4 GB），经确认后自动下载到 `~/.smart-summarize`；下载源自动回退（whisper-cli 优先本仓库自托管构建，模型优先 HuggingFace 官方/镜像，校验和见 `models/README.md`）；也可用环境变量指向已有安装 |
 
 提示：所有 Python 库与组件都**无需预先安装**——首次用到某类内容时脚本会自动检测，并经确认后代为安装。
 
