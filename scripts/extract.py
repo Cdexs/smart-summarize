@@ -11,7 +11,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
 - v0.5.2: 默认临时目录改为技能目录下 temp/（SMART_SUMMARIZE_TMPDIR 优先级不变；技能目录不可写时回退系统 temp）
 - v0.5.3: 修复 whisper.cpp 预编译资产 404（latest release 资产为空，改 GitHub API 定位 + 固定版本兜底）；ggml 模型下载支持镜像回退（huggingface.co 不可达时自动切换 hf-mirror.com，兼容 SMART_SUMMARIZE_HF_MIRROR 与 HF_ENDPOINT）；pip 安装支持镜像回退（默认源失败自动切换清华/腾讯镜像，SMART_SUMMARIZE_PIP_INDEX_URL 可指定）
-- v0.5.4: 组件下载新增技能仓库自托管首要来源（components-v1 Release：whisper-cli Vulkan+CPU 通用构建、ggml-large-v3-turbo 模型），官方源/镜像降为回退
+- v0.5.4: 组件下载新增技能仓库自托管首要来源（components-v1 Release：whisper-cli Vulkan+CPU 通用构建、ggml-large-v3-turbo 模型），官方源/镜像降为回退；修复「组件安装后仍检测缺失」（QA D1）——_handle_missing_deps 链式处理多轮缺失（入口 pip 预检与 ffmpeg/whisper/模型检查是两个独立检查点），停滞检测 + 最多 3 轮
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -1466,54 +1466,72 @@ def _run_extraction(args):
     return {"error": f"不支持的内容类型: {content_type}", "success": False}
 
 def _handle_missing_deps(args, err):
-    """列出缺失组件（名称/用途/来源/预计大小），经用户确认后下载安装并继续原任务。"""
-    items = [_dep_detail(k) for k in err.kinds]
-    print("\n⚠️ 提取/转录所需的以下组件缺失：", file=sys.stderr)
-    for it in items:
-        print(f"  • {it['name']}（{it['purpose']}）"
-              f"\n    来源: {it['source']}\n    预计大小: {it['est_size']}", file=sys.stderr)
+    """列出缺失组件（名称/用途/来源/预计大小），经用户确认后下载安装并继续原任务。
 
-    allowed = args.download_deps
-    if not allowed:
-        interactive = False
-        try:
-            interactive = bool(sys.stdin and sys.stdin.isatty())
-        except Exception:
+    依赖检查存在多个独立检查点（入口的 pip 库预检、音视频组件的 ffmpeg/whisper/model 检查），
+    装好一轮后重跑可能暴露新一轮缺失——循环处理，直到任务成功、无法继续或达到轮次上限。
+    已尝试安装却仍被报告缺失的 kind 视为停滞（如安装成功但检测不过、PATH 未刷新），
+    立即返回结构化错误，避免死循环与重复下载。"""
+    MAX_ROUNDS = 3
+    attempted = set()
+    current = err
+    for round_no in range(1, MAX_ROUNDS + 1):
+        kinds = [k for k in current.kinds if k not in attempted]
+        if not kinds:
+            return {"success": False,
+                    "error": "组件安装后仍检测缺失，请检查安装或手动配置环境变量后重试",
+                    "missing": [_dep_detail(k) for k in current.kinds]}
+        items = [_dep_detail(k) for k in kinds]
+        header = "\n⚠️ 提取/转录所需的以下组件缺失：" if round_no == 1 \
+            else "\n⚠️ 继续执行时又发现以下组件缺失："
+        print(header, file=sys.stderr)
+        for it in items:
+            print(f"  • {it['name']}（{it['purpose']}）"
+                  f"\n    来源: {it['source']}\n    预计大小: {it['est_size']}", file=sys.stderr)
+
+        allowed = args.download_deps
+        if not allowed:
             interactive = False
-        if not interactive:
-            print("\n（非交互环境：可在用户确认后加 --download-deps 重新运行）", file=sys.stderr)
-        else:
             try:
-                ans = input("\n是否立即下载并安装以上组件，然后继续任务? [y/N] ")
-                allowed = ans.strip().lower() in ("y", "yes")
-            except (EOFError, KeyboardInterrupt, OSError):
-                allowed = False
+                interactive = bool(sys.stdin and sys.stdin.isatty())
+            except Exception:
+                interactive = False
+            if not interactive:
+                print("\n（非交互环境：可在用户确认后加 --download-deps 重新运行）", file=sys.stderr)
+            else:
+                try:
+                    ans = input("\n是否立即下载并安装以上组件，然后继续任务? [y/N] ")
+                    allowed = ans.strip().lower() in ("y", "yes")
+                except (EOFError, KeyboardInterrupt, OSError):
+                    allowed = False
 
-    if not allowed:
-        return {"success": False,
-                "error": "缺少必需组件，未下载。请确认后重试。",
-                "missing": items}
+        if not allowed:
+            return {"success": False,
+                    "error": "缺少必需组件，未下载。请确认后重试。",
+                    "missing": items}
 
-    all_ok = True
-    for it in items:
+        all_ok = True
+        for it in items:
+            attempted.add(it["kind"])
+            try:
+                path = _install_dep(it["kind"])
+                print(f"  ✅ 已安装 {it['name']} → {path}", file=sys.stderr)
+            except Exception as e:
+                all_ok = False
+                print(f"  ❌ {it['name']} 安装失败: {e}", file=sys.stderr)
+        if not all_ok:
+            return {"success": False,
+                    "error": "部分组件安装失败（见 stderr）。可手动安装后重试。",
+                    "missing": items}
+        print("  ↻ 组件就绪，继续执行原任务...", file=sys.stderr)
         try:
-            path = _install_dep(it["kind"])
-            print(f"  ✅ 已安装 {it['name']} → {path}", file=sys.stderr)
-        except Exception as e:
-            all_ok = False
-            print(f"  ❌ {it['name']} 安装失败: {e}", file=sys.stderr)
-    if not all_ok:
-        return {"success": False,
-                "error": "部分组件安装失败（见 stderr）。可手动安装后重试。",
-                "missing": items}
-    print("  ↻ 组件就绪，继续执行原任务...", file=sys.stderr)
-    try:
-        return _run_extraction(args)
-    except MissingDependencyError as e:
-        # 安装声称成功但检测仍不过（如 PATH 未刷新），给出结构化错误而非裸 traceback
-        return {"success": False,
-                "error": "组件安装后仍检测缺失，请检查安装或手动配置环境变量后重试",
-                "missing": [_dep_detail(k) for k in e.kinds]}
+            return _run_extraction(args)
+        except MissingDependencyError as e:
+            current = e  # 重跑暴露下一轮缺失检查点，进入下一轮处理
+            continue
+    return {"success": False,
+            "error": f"组件安装后仍有缺失（已达 {MAX_ROUNDS} 轮处理上限），请检查安装或手动配置环境变量后重试",
+            "missing": [_dep_detail(k) for k in current.kinds]}
 
 def main():
     parser = argparse.ArgumentParser(description='智能内容提取工具')

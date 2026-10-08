@@ -67,7 +67,7 @@ extract.py 被调用（--url 或 --file）
   ├─ ③ 音视频：先查 ffmpeg/whisper-cli/ggml 模型
   │     ├─ 全部就绪 → ffmpeg 转 WAV → whisper-cli 转录 → SRT/文本
   │     └─ 有缺失  → 列出清单（名称/用途/来源/大小）→ 用户确认
-  │                    ├─ 同意 → 下载安装（仅装到 ~/.smart-summarize）→ 自动重跑原任务
+  │                    ├─ 同意 → 下载安装（仅装到 ~/.smart-summarize）→ 自动重跑原任务（重跑暴露的新缺失继续同流程，最多 3 轮）
   │                    └─ 拒绝/非交互 → 返回 JSON 缺失清单，不下载
   └─ ④ 输出 JSON（成功：title/author/transcript/content；失败：error/missing/cookieHint）
 ```
@@ -247,9 +247,10 @@ cookies 具有账号会话权限，不能提交到技能仓库、复制到其他
 
 ## 更新日志
 
-### v0.5.4（组件自托管下载源）
+### v0.5.4（组件自托管下载源 + 多轮缺失链式安装修复）
 - 新增技能仓库自托管组件源（GitHub Release `components-v1`）：whisper-cli（Windows x64 Vulkan+CPU 通用构建）与 ggml-large-v3-turbo 模型；两类下载的候选链均以自托管为第一来源，官方源/镜像保留为回退——外部源资产变动不再直接导致下载失败；
 - 下载自托管 Vulkan 通用构建时 stderr 明确标注（AMD/Intel GPU 经 Vulkan 加速，无 Vulkan 环境自动回退 CPU）；
+- 修复全新环境 `--download-deps` 无法一次跑通的缺陷（QA 报告 D1）：依赖检查存在两个独立检查点（入口 pip 库预检、音视频组件的 ffmpeg/whisper/model 检查），此前第二轮缺失被直接报「组件安装后仍检测缺失」而放弃；`_handle_missing_deps` 改为循环——装完一轮自动重跑，若暴露新缺失则继续走同一「列出清单 → 确认 → 安装」流程（交互模式每轮再次确认；`--download-deps` 已获同意则连续处理），最多 3 轮；停滞保护：某组件安装后仍被报告缺失时立即返回结构化错误，不重复下载、不死循环；
 - 修复组件清单体积探测把 404 响应误当资产大小的问题（校验 HTTP 状态码）；资产清单、SHA256 与许可说明见仓库 `models/README.md`。
 
 ### v0.5.3（组件下载链路网络适配）
