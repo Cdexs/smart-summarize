@@ -161,7 +161,7 @@ export SMART_SUMMARIZE_TMPDIR="$HOME/.cache/smart-summarize-tmp"
   ①macOS/Linux 有 Homebrew 时 `brew install whisper-cpp`（macOS Metal 默认启用）；
   ②Windows：检测到 **NVIDIA GPU** 时优先下载官方 **cublas 预编译版**（自带 CUDA 运行库，无需 CUDA Toolkit，约 270MB）；其他显卡（含 AMD/Intel 核显）优先下载**技能仓库自托管的 Vulkan+CPU 通用构建**（AMD/Intel GPU 直接获得 Vulkan 加速，无 Vulkan 环境自动回退 CPU），失败时回退官方 CPU 预编译；官方资产的下载地址经 GitHub API 动态定位（上游 v1.9.3+ 版本 release 资产为空，自动选择最新含资产的 release/commit 构建）；
   ③源码构建兜底（需 git/cmake/编译器），构建时自动按硬件选后端：NVIDIA + CUDA Toolkit → CUDA；AMD + ROCm → HIP（自动检测 gfx 架构）；有 Vulkan SDK → Vulkan（A 卡核显如 Radeon 780M、Intel 核显的唯一官方 GPU 路径）；都没有则 CPU（并明确告知）。也可用 `SMART_SUMMARIZE_WHISPERCPP_CMAKE_FLAGS` 追加自定义 CMake 参数；需要换后端时删除 `~/.smart-summarize/whisper.cpp` 构建目录及受管 bin 中的二进制后重试。
-- ggml 模型：优先从**技能仓库自托管源**下载（`components-v1` 已托管 large-v3-turbo，约 1.6GB），回退 HuggingFace `ggerganov/whisper.cpp`（q5_0 约 560MB 等未托管档位直接走官方），再回退公共镜像 hf-mirror.com；`SMART_SUMMARIZE_HF_MIRROR` 可指定镜像源（优先级最高）。存到上述模型目录首个可用位置。
+- ggml 模型：从 HuggingFace `ggerganov/whisper.cpp` 下载（large-v3-turbo 约 1.6GB，q5_0 约 560MB）；huggingface.co 不可达时自动切换公共镜像 hf-mirror.com，两者均不可达时回退技能仓库自托管源（`components-v1` 已托管 large-v3-turbo）；`SMART_SUMMARIZE_HF_MIRROR` 可指定镜像源（优先级最高）。存到上述模型目录首个可用位置。
 
 ### 默认下载版本矩阵（whisper-cli）
 
@@ -248,7 +248,7 @@ cookies 具有账号会话权限，不能提交到技能仓库、复制到其他
 ## 更新日志
 
 ### v0.5.4（组件自托管下载源 + 多轮缺失链式安装修复）
-- 新增技能仓库自托管组件源（GitHub Release `components-v1`）：whisper-cli（Windows x64 Vulkan+CPU 通用构建）与 ggml-large-v3-turbo 模型；两类下载的候选链均以自托管为第一来源，官方源/镜像保留为回退——外部源资产变动不再直接导致下载失败；
+- 新增技能仓库自托管组件源（GitHub Release `components-v1`）：whisper-cli（Windows x64 Vulkan+CPU 通用构建）与 ggml-large-v3-turbo 模型；whisper 资产以自托管为首（与官方同走 GitHub 资产 CDN，速度一致，且为 Vulkan 构建、资产稳定）；**模型候选链官方优先**（huggingface.co → hf-mirror.com → 自托管兜底）——GitHub 资产通道在受限网络下带宽差（QA 实测约 54KB/s），不作模型首选；
 - 下载自托管 Vulkan 通用构建时 stderr 明确标注（AMD/Intel GPU 经 Vulkan 加速，无 Vulkan 环境自动回退 CPU）；
 - 修复全新环境 `--download-deps` 无法一次跑通的缺陷（QA 报告 D1）：依赖检查存在两个独立检查点（入口 pip 库预检、音视频组件的 ffmpeg/whisper/model 检查），此前第二轮缺失被直接报「组件安装后仍检测缺失」而放弃；`_handle_missing_deps` 改为循环——装完一轮自动重跑，若暴露新缺失则继续走同一「列出清单 → 确认 → 安装」流程（交互模式每轮再次确认；`--download-deps` 已获同意则连续处理），最多 3 轮；停滞保护：某组件安装后仍被报告缺失时立即返回结构化错误，不重复下载、不死循环；
 - 修复组件清单体积探测把 404 响应误当资产大小的问题（校验 HTTP 状态码）；资产清单、SHA256 与许可说明见仓库 `models/README.md`。

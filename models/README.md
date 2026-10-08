@@ -7,7 +7,7 @@
 - 发布页：https://github.com/Cdexs/smart-summarize/releases/tag/components-v1
 - 下载 URL 模式：`https://github.com/Cdexs/smart-summarize/releases/download/components-v1/<文件名>`
 
-技能的下载候选链以**自托管源为第一来源**，官方源与镜像保留为回退（见 `scripts/extract.py` 中 `SELF_HOSTED_*` 常量）——外部源的资产变动（如上游 release 改挂 commit 构建）不再直接导致下载失败。
+下载候选链策略（详见 `scripts/extract.py` 的候选链函数与 `SELF_HOSTED_*` 常量）：**whisper 资产以自托管为首**（与官方同走 GitHub 资产 CDN、速度一致，且为 Vulkan 构建、资产稳定，规避上游 release 资产变动问题）；**模型官方源优先**（huggingface.co → hf-mirror.com → 自托管兜底）——GitHub 资产通道在受限网络下带宽差，不作模型首选。
 
 ## 资产清单（components-v1）
 

@@ -11,7 +11,7 @@ pi 迁移版（源自 OpenClaw smart-summarize v3.0），变更：
 - v0.5.1: 修复 ffmpeg/cublas 安装链路与 macOS 包名判定；SMART_SUMMARIZE_PROXY 生效；网页标题前缀剥离；字幕语言回退；子进程 UTF-8 解码
 - v0.5.2: 默认临时目录改为技能目录下 temp/（SMART_SUMMARIZE_TMPDIR 优先级不变；技能目录不可写时回退系统 temp）
 - v0.5.3: 修复 whisper.cpp 预编译资产 404（latest release 资产为空，改 GitHub API 定位 + 固定版本兜底）；ggml 模型下载支持镜像回退（huggingface.co 不可达时自动切换 hf-mirror.com，兼容 SMART_SUMMARIZE_HF_MIRROR 与 HF_ENDPOINT）；pip 安装支持镜像回退（默认源失败自动切换清华/腾讯镜像，SMART_SUMMARIZE_PIP_INDEX_URL 可指定）
-- v0.5.4: 组件下载新增技能仓库自托管首要来源（components-v1 Release：whisper-cli Vulkan+CPU 通用构建、ggml-large-v3-turbo 模型），官方源/镜像降为回退；修复「组件安装后仍检测缺失」（QA D1）——_handle_missing_deps 链式处理多轮缺失（入口 pip 预检与 ffmpeg/whisper/模型检查是两个独立检查点），停滞检测 + 最多 3 轮
+- v0.5.4: 组件自托管来源（components-v1：whisper-cli Vulkan+CPU 通用构建、ggml-large-v3-turbo 模型）——whisper 资产自托管优先；模型候选链官方源/镜像优先、自托管兜底（GitHub 资产 CDN 受限网络带宽差）；修复「组件安装后仍检测缺失」（QA D1）——_handle_missing_deps 链式处理多轮缺失（入口 pip 预检与 ffmpeg/whisper/模型检查是两个独立检查点），停滞检测 + 最多 3 轮
 - v3.2: 状态行改输出 stderr（不再污染重定向的 SRT/JSON 文件）
 - 临时目录改用 tempfile（移除 ~/.openclaw 依赖）
 - yt-dlp 参数修正：--js-runtime -> --js-runtimes（EJS 时代必需）
@@ -709,8 +709,9 @@ MODEL_URL_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
 HF_FALLBACK_MIRRORS = ("https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/",)
 
 # 技能仓库自托管组件（GitHub Release 资产；git 仓库单文件限 100MB，大文件只能走
-# Release 资产通道）。候选链以自托管为首要来源，官方源/镜像保留为回退——外部源
-# 变动不再直接导致下载失败。资产清单、SHA256 与许可说明见仓库 models/README.md。
+# Release 资产通道）。whisper 资产以自托管为首（与官方同走 GitHub 资产 CDN，速度一致，
+# 且为 Vulkan 构建、资产稳定）；模型仅作官方源/镜像均不可达时的兜底（GitHub 资产 CDN
+# 在受限网络下带宽差，QA 实测约 54KB/s，不作模型首选）。资产清单与校验和见 models/README.md。
 SELF_HOSTED_COMPONENTS_TAG = "components-v1"
 SELF_HOSTED_BASE_URL = (
     "https://github.com/Cdexs/smart-summarize/releases/download/"
@@ -721,15 +722,16 @@ SELF_HOSTED_WHISPER_ASSETS = {"whisper-bin-x64.zip"}
 
 def _model_url_candidates(fname):
     """模型下载 URL 候选（按序）：SMART_SUMMARIZE_HF_MIRROR / HF_ENDPOINT（huggingface_hub
-    惯例变量）显式镜像 → 技能仓库自托管（如有该文件）→ 官方源 → 公共镜像"""
+    惯例变量）显式镜像 → 官方源（huggingface.co）→ 公共镜像（hf-mirror.com）→
+    技能仓库自托管（GitHub 资产 CDN 在受限网络带宽差，仅作兜底）"""
     urls = []
     configured = os.environ.get("SMART_SUMMARIZE_HF_MIRROR") or os.environ.get("HF_ENDPOINT")
     if configured:
         urls.append(configured.rstrip("/") + "/" + fname)
-    if fname in SELF_HOSTED_MODEL_FILES:
-        urls.append(SELF_HOSTED_BASE_URL + fname)
     bases = [MODEL_URL_BASE.rstrip("/")] + [m.rstrip("/") for m in HF_FALLBACK_MIRRORS]
     urls.extend(b + "/" + fname for b in dict.fromkeys(bases))
+    if fname in SELF_HOSTED_MODEL_FILES:
+        urls.append(SELF_HOSTED_BASE_URL + fname)
     return urls
 
 WHISPERCPP_REPO_URL = "https://github.com/ggml-org/whisper.cpp"
@@ -1152,7 +1154,7 @@ def _dep_detail(kind):
         if size:
             break
     size = size or KNOWN_MODEL_SIZES.get(fname, 0)
-    note = ("（技能仓库自托管；不可达时自动回退官方源与公共镜像 hf-mirror.com）"
+    note = ("（不可达时自动切换公共镜像 hf-mirror.com；两者均不可达时才回退技能仓库自托管）"
             if fname in SELF_HOSTED_MODEL_FILES else
             "（不可达时自动切换公共镜像 hf-mirror.com；可用 SMART_SUMMARIZE_HF_MIRROR 指定）")
     return {"kind": kind, "name": fname,
